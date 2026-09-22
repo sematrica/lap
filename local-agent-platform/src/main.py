@@ -11,6 +11,7 @@ from .llm_client import OllamaClient
 from .logger import EventLogger
 from .tools.email_tool import EmailTool
 from .tools.registry import ToolRegistry
+from .tools.web_tool import WebTool
 
 
 def main(argv=None):
@@ -27,6 +28,7 @@ def main(argv=None):
         logger.emit("agent_started")
         registry = ToolRegistry(config.tools, config.name, InteractiveApproval(), logger)
         registry.register(EmailTool(config.smtp, config.dry_run, logger))
+        registry.register(WebTool())
         registry.definitions()
         client = OllamaClient(config.base_url, config.model, config.timeout)
         client.verify()

@@ -10,7 +10,7 @@ class ConfigTests(unittest.TestCase):
     def test_yaml_and_safe_defaults(self):
         config = load_config(env={})
         self.assertEqual(config.name, "agent-01")
-        self.assertEqual(config.tools, ("send_email",))
+        self.assertEqual(config.tools, ("read_webpage", "send_email"))
         self.assertTrue(config.dry_run)
         self.assertEqual(config.base_url, "http://host.containers.internal:11434")
 

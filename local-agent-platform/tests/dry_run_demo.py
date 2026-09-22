@@ -16,6 +16,7 @@ from src.llm_client import OllamaClient
 from src.logger import EventLogger
 from src.tools.email_tool import EmailTool
 from src.tools.registry import ToolRegistry
+from src.tools.web_tool import WebTool
 
 
 def main():
@@ -23,6 +24,8 @@ def main():
     logger = EventLogger(config.name)
     registry = ToolRegistry(config.tools, config.name, InteractiveApproval(), logger)
     registry.register(EmailTool(config.smtp, True, logger))
+
+    registry.register(WebTool())
 
     def reply(request):
         messages = json.loads(request.content)["messages"]

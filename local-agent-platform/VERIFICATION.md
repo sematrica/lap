@@ -1,5 +1,40 @@
 # Stage 1 verification — 2026-09-21
 
+## Public webpage reader — 2026-09-22 UTC
+
+Added `read_webpage` to the current Developer copy, registered it, and enabled it in
+Agent-01/02/03/04 YAML. No `.env` files or running agents were changed.
+
+- **43 unit tests passed** in the copied project. Tests cover URL/task allowlisting,
+  public-IP validation, mixed DNS answers, DNS pinning, private redirect blocking,
+  downgrade/redirect limits, HTML extraction, content/size/time limits, untrusted
+  content, the model tool-result round trip, and unchanged email approval.
+- A real HTTPS read of `https://example.com/` succeeded using the pinned transport.
+- Podman image build succeeded: `local-agent:stage1`, image
+  `d6066243e7aa5a7ccfae48b69706fadb515861b0c2f6d0cf968ee4c1a6b4771a`.
+- A temporary non-root/read-only container reached native Ollama, called
+  `read_webpage`, retrieved example.com, and produced a correct summary with its URL
+  in two model turns (exit 0). Email dry-run was forced and no SMTP credentials
+  were passed. No real email was sent.
+
+Command used for the live container test:
+
+```sh
+podman run --rm \
+  -e OLLAMA_BASE_URL=http://host.containers.internal:11434 \
+  -e OLLAMA_MODEL=llama3.1:latest -e EMAIL_DRY_RUN=true \
+  --read-only --cap-drop=all --security-opt=no-new-privileges \
+  local-agent:stage1 \
+  --task 'Use read_webpage to read https://example.com/ and summarize what the page is for. Cite its URL. Do not send email.'
+```
+
+Limitations: supplied URLs only, static HTML/plain text only, no search/login/JS/PDF.
+The model can still misinterpret sources; untrusted-content instructions are not a
+proof of prompt-injection immunity. DNS uses the system resolver's timeout; socket
+and body-read limits do not establish a hard whole-operation wall-clock deadline.
+Existing containers must be recreated to use the new image.
+
+
 ## Follow-up: unwanted email proposals (22:22 UTC)
 
 Fixed the always-offered email tool: definitions now depend on a literal recipient

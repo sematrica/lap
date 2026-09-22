@@ -833,3 +833,47 @@ those warnings. They can affect other work.
 **Remember:** `run` creates; `start` resumes. Email mode comes from the container's
 creation-time environment. Source changes require rebuilding and recreating. Your
 Mac runs Ollama; Podman runs the agent.
+
+
+## 19. Read public webpages with your agents
+
+This extension reads public URLs you supply. It cannot search the web, click,
+log in, run JavaScript, or read PDFs. The default configurations enable
+`read_webpage`. It does not require an API key.
+
+At the agent task prompt:
+
+```text
+Read https://example.com/ and summarize the page. Include its source URL.
+```
+
+Only URLs in your current task are eligible. The tool will not follow links chosen
+from page text; redirects are limited and rechecked. Private network URLs, including
+`localhost` and `host.containers.internal`, are blocked by the webpage tool. This
+does not affect the Ollama client's separate connection to your Mac.
+
+Webpage reads do not require an approval prompt. Email still does. `EMAIL_DRY_RUN`
+does not disable webpage network requests. Treat summaries as model-generated
+interpretations and check their cited source.
+
+After this update, recreate each agent to use the rebuilt image. For Agent-01,
+finish pending operations, then run from the application folder:
+
+```sh
+podman stop agent-01
+podman rm agent-01
+podman run -it --name agent-01 --env-file .env \
+  -e EMAIL_DRY_RUN=true \
+  --read-only --cap-drop=all --security-opt=no-new-privileges \
+  local-agent:stage1
+```
+
+This example forces email dry-run. Omit that override only when you intend the
+email mode specified in `.env`. For other agents use the matching container name
+and YAML mount from section 12 (substitute `04` for Agent-04). Existing containers
+were not stopped or recreated automatically during development.
+
+To disable webpage reading for an agent, remove `read_webpage` from its YAML tools
+list. For mounted YAML, restart the agent; for the default YAML copied into the
+image, rebuild and recreate. Large/compressed/dynamic pages can return a clear
+error rather than content. See the README's webpage section for precise limits.

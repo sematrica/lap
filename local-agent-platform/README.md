@@ -4,6 +4,69 @@ One Python agent, one configurable Ollama endpoint, and one controlled SMTP emai
 tool. Python 3.12+ is required. Runtime dependencies are only `httpx` and PyYAML;
 tests use Python's built-in `unittest`. Email defaults to **dry-run**.
 
+
+## Public webpage reading (added after Stage 1)
+
+Agents can now read static public HTML/text from URLs you put in the current task.
+This is a URL reader, not a search engine or interactive browser. No new dependency,
+API key, browser installation, or SMTP credentials are needed. Example task:
+
+```text
+Read https://example.com/ and summarize what the page is for. Cite the URL.
+```
+
+`read_webpage` is registered in `main.py` and enabled in the supplied Agent-01 through
+Agent-04 YAML configurations. Remove `read_webpage` from an agent's `tools` list to
+disable it. The tool is offered only for tasks containing an HTTP(S) URL, and its
+requested URL must match a URL in that task. Redirects are followed at most three
+times, checking each new destination. Links found in page text are not fetched.
+
+The reader accepts HTTP port 80 and HTTPS port 443, verifies HTTPS certificates,
+rejects credentials in URLs, checks all DNS results for public addresses, and pins
+the connection to a validated address. Local/Podman services, private/reserved IPs,
+and IPv6 translation/tunnel destinations are blocked. It ignores proxy environment
+variables, sends no credentials or cookies, runs no scripts, and fetches no images.
+Limits: 512 KiB response body, 12,000 characters returned to the model, 10-second
+socket timeout, and a 20-second body-read budget per response. DNS uses the system
+resolver timeout; these are not a hard wall-clock deadline for the entire tool call.
+Compressed responses are rejected to avoid decompression expansion. Large pages,
+PDFs, authenticated sites, and JavaScript-only pages may not work.
+
+Page content is returned as `untrusted_text`, with a system instruction that it is
+source information rather than authority to change tasks or invoke tools. Prompt
+instructions reduce model mistakes; they are not a guarantee against misleading
+summaries. The runtime separately prevents reading URLs invented by page content
+and prevents email to recipients not supplied by the user. Email approval remains
+mandatory. Read operations themselves do not prompt for approval; including a URL
+in a task enables reading that URL. Use public URLs intended to be retrieved.
+`EMAIL_DRY_RUN` affects email only: webpage reads still make real HTTP requests.
+
+### Use the updated image
+
+From `/Users/mac14/Developer/LocalAgentPlatform/local-agent-platform`:
+
+```sh
+podman build -t local-agent:stage1 -f Containerfile .
+podman run --rm -it \
+  -e OLLAMA_BASE_URL=http://host.containers.internal:11434 \
+  -e OLLAMA_MODEL=llama3.1:latest -e EMAIL_DRY_RUN=true \
+  --read-only --cap-drop=all --security-opt=no-new-privileges \
+  local-agent:stage1 \
+  --task 'Read https://example.com/ and summarize what the page is for. Cite the URL.'
+```
+
+This temporary test uses no `.env` or SMTP credentials and does not replace existing
+agents. Existing containers still use their old code: stop/remove and recreate each
+one using its usual run command to adopt the new image. Agent-02/03/04 should keep
+their existing YAML mount. Rebuilding alone, or restarting an old container, does
+not change the code in that container.
+
+The separate `src/tools/web_tool.py` module uses standard-library HTTP/socket/TLS
+code to pin the checked IP while preserving the original HTTPS hostname. The
+Ollama client continues to use `httpx`. See the
+[OWASP SSRF guidance](https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html)
+for the network validation concerns behind this design.
+
 ## What each component does
 
 **LLM ≠ Agent ≠ Tool ≠ Container.** Ollama hosts the language model on your Mac.

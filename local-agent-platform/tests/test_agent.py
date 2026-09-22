@@ -11,6 +11,7 @@ from src.logger import EventLogger
 from src.main import main
 from src.tools.email_tool import EmailTool
 from src.tools.registry import ToolRegistry
+from src.tools.web_tool import WebTool
 
 EMAIL = {"to": "person@example.com", "subject": "Hello", "body": "Report ready."}
 CALL = {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "send_email", "arguments": EMAIL}}]}
@@ -27,6 +28,7 @@ class AgentTests(unittest.TestCase):
         self.approval.approve.return_value = True
         self.registry = ToolRegistry(self.config.tools, self.config.name, self.approval, self.logger)
         self.registry.register(EmailTool(self.config.smtp, True, self.logger))
+        self.registry.register(WebTool())
         self.output = []
         self.agent = Agent(self.config, self.client, self.registry, self.logger, self.output.append)
 
@@ -67,6 +69,23 @@ class AgentTests(unittest.TestCase):
     def test_invented_recipient_cannot_reach_approval(self, smtp):
         self.client.chat.side_effect = [CALL, FINAL]
         self.agent.run("Send a message to someone-else@example.com.")
+        self.approval.approve.assert_not_called()
+        smtp.assert_not_called()
+
+    @patch("src.tools.web_tool.fetch_once")
+    @patch("src.tools.email_tool.smtplib.SMTP")
+    def test_webpage_result_reaches_model_without_email(self, smtp, fetch):
+        fetch.return_value = (200, "text/html", "utf-8", b"<p>Example domain.</p>")
+        self.client.chat.side_effect = [{"role": "assistant", "content": "", "tool_calls": [
+            {"function": {"name": "read_webpage", "arguments": {"url": "https://example.com/"}}}]},
+            {"role": "assistant", "content": "Example domain. Source: https://example.com/"}]
+        answer = self.agent.run("Read https://example.com/ and summarize it.")
+        self.assertIn("https://example.com/", answer)
+        messages = self.client.chat.call_args.args[0]
+        result = json.loads(next(msg["content"] for msg in messages if msg["role"] == "tool"))
+        self.assertEqual(result["untrusted_text"], "Example domain.")
+        self.assertEqual(result["source_url"], "https://example.com/")
+        self.assertIn("untrusted source data", messages[0]["content"])
         self.approval.approve.assert_not_called()
         smtp.assert_not_called()
 
