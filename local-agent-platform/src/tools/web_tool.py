@@ -12,8 +12,8 @@ from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 
 from ..errors import AgentError
 
-MAX_BYTES = 512 * 1024
-MAX_TEXT = 12000
+MAX_BYTES = 2 * 1024 * 1024
+MAX_TEXT = 50000
 MAX_REDIRECTS = 3
 SOCKET_TIMEOUT = 10
 READ_BUDGET = 20
