@@ -1,0 +1,9 @@
+*
+!Containerfile
+!requirements.txt
+!src/
+!src/**
+!config/
+!config/agent.yaml
+**/__pycache__/
+**/*.pyc
