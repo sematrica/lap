@@ -1,5 +1,19 @@
 # Stage 1 verification — 2026-09-21
 
+## Webpage completion fix — 2026-09-22
+
+The Context-AI-DataSet URL returned HTTP 200 and a 6,554-byte body, but the reader
+set a socket timeout after HTTPResponse had consumed Content-Length and closed
+the final socket reference. That raised EBADF and became web_connection_error.
+The read loop now checks response completion before touching the socket again.
+
+A regression test using the real HTTPResponse parser failed on the old code and
+passes on the fix; premature EOF remains an error. All 45 tests pass. A live read
+of https://sematrica.github.io/Context-AI-DataSet/ now returns 2,399 characters
+without truncation. User changes MAX_BYTES=2 MiB and MAX_TEXT=50,000 are preserved.
+Download-size error messages now use the configured byte limit.
+
+
 ## Public webpage reader — 2026-09-22 UTC
 
 Added `read_webpage` to the current Developer copy, registered it, and enabled it in

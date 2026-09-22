@@ -157,12 +157,14 @@ def fetch_once(url):
             if length is not None:
                 try:
                     if int(length) < 0 or int(length) > MAX_BYTES:
-                        fail("web_page_too_large", "Webpage exceeds the 512 KiB download limit.")
+                        fail("web_page_too_large", f"Webpage exceeds the {MAX_BYTES:,}-byte download limit.")
                 except ValueError:
                     fail("web_malformed_response", "Webpage returned an invalid content length.")
             data = bytearray()
             deadline = time.monotonic() + READ_BUDGET
-            while True:
+            # HTTPResponse can close the last socket reference after its final chunk.
+            # Stop before setting another timeout on that completed connection.
+            while not response.isclosed():
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     fail("web_timeout", "Webpage download timed out.")
@@ -172,7 +174,7 @@ def fetch_once(url):
                     break
                 data.extend(chunk)
                 if len(data) > MAX_BYTES:
-                    fail("web_page_too_large", "Webpage exceeds the 512 KiB download limit.")
+                    fail("web_page_too_large", f"Webpage exceeds the {MAX_BYTES:,}-byte download limit.")
             if length is not None and len(data) != int(length):
                 fail("web_malformed_response", "Webpage download was incomplete.")
             return 200, media_type, response.headers.get_content_charset() or "utf-8", bytes(data)

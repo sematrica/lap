@@ -1,4 +1,5 @@
 import io
+import http.client
 import socket
 import ssl
 import unittest
@@ -122,6 +123,7 @@ class WebTests(unittest.TestCase):
 class TransportTests(unittest.TestCase):
     def setUp(self):
         self.response = Mock(status=200)
+        self.response.isclosed.return_value = False
         self.response.__enter__ = Mock(return_value=self.response)
         self.response.__exit__ = Mock(return_value=False)
         self.headers = {"Content-Type": "text/plain", "Content-Length": "5"}
@@ -191,3 +193,44 @@ class TransportTests(unittest.TestCase):
             WebTool().execute(WebTool().validate({"url": "http://example.com/"}))
         self.assertEqual(caught.exception.code, "web_address_blocked")
         self.assertEqual(sock.call_count, 1)
+
+
+class CompletedResponseTests(unittest.TestCase):
+    @patch("src.tools.web_tool.socket.getaddrinfo", return_value=[PUBLIC])
+    @patch("src.tools.web_tool.http.client.HTTPConnection")
+    @patch("src.tools.web_tool.socket.socket")
+    def test_complete_response_does_not_touch_closed_socket(self, socket_factory, connection, dns):
+        # Real HTTPResponse closes its stream upon consuming Content-Length.
+        # Simulate the underlying connection becoming unusable at that point.
+        for body in (b"Hello", b"A" * 40000, b""):
+            with self.subTest(size=len(body)):
+                wire = io.BytesIO(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n"
+                                  + f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
+                                  + body)
+                sock = Mock()
+                sock.makefile.return_value = wire
+                def set_timeout(seconds):
+                    if wire.closed:
+                        raise OSError(9, "Bad file descriptor")
+                sock.settimeout.side_effect = set_timeout
+                socket_factory.return_value = sock
+                response = http.client.HTTPResponse(sock)
+                response.begin()
+                connection.return_value.getresponse.return_value = response
+                self.assertEqual(fetch_once("http://example.com/")[3], body)
+                self.assertTrue(response.isclosed())
+
+    @patch("src.tools.web_tool.socket.getaddrinfo", return_value=[PUBLIC])
+    @patch("src.tools.web_tool.http.client.HTTPConnection")
+    @patch("src.tools.web_tool.socket.socket")
+    def test_premature_eof_is_still_an_error(self, socket_factory, connection, dns):
+        sock = Mock()
+        sock.makefile.return_value = io.BytesIO(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 10\r\n\r\nshort")
+        socket_factory.return_value = sock
+        response = http.client.HTTPResponse(sock)
+        response.begin()
+        connection.return_value.getresponse.return_value = response
+        with self.assertRaises(AgentError) as caught:
+            fetch_once("http://example.com/")
+        self.assertEqual(caught.exception.code, "web_malformed_response")
