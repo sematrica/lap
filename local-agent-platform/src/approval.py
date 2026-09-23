@@ -3,6 +3,21 @@
 import unicodedata
 from typing import Protocol
 
+from .errors import AgentError
+
+
+class ApprovalRequired(AgentError):
+    """Stop the task when the service cannot obtain human approval."""
+
+
+class ServiceApproval:
+    def approve(self, agent, tool, preview, dry_run):
+        raise ApprovalRequired(
+            "approval_required",
+            "HTTP services cannot obtain human approval. No email was sent. "
+            "Run this task through the interactive CLI to review and approve it.",
+        )
+
 
 def terminal_text(value):
     # Escape terminal controls and bidi formatting so model text cannot hide the preview.

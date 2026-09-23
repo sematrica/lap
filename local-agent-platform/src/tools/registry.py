@@ -2,7 +2,7 @@
 
 from typing import Protocol
 
-from ..approval import ApprovalPolicy
+from ..approval import ApprovalPolicy, ApprovalRequired
 from ..errors import AgentError
 
 
@@ -64,6 +64,9 @@ class ToolRegistry:
             result = tool.execute(request)
             self.logger.emit("tool_completed", status=result["status"], **fields)
             return result
+        except ApprovalRequired:
+            self.logger.emit("approval_unavailable", **fields)
+            raise
         except AgentError as exc:
             self.logger.emit("tool_failed", level="ERROR", error_code=exc.code, **fields)
             return {"status": "error", "code": exc.code, "message": str(exc)}

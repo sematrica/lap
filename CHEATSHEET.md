@@ -1,5 +1,65 @@
 # Local Agent Platform — first-time user command guide
 
+## Stage 2: run all agents as background services
+
+The default workflow is now Compose. The older numbered sections below describe
+the optional interactive CLI workflow; their `local-agent:stage1` image examples
+can use the current `localhost/local-agent:stage2` image instead.
+
+```bash
+cd /Users/mac14/Developer/LocalAgentPlatform/local-agent-platform
+
+# First-time prerequisite if `podman compose version` fails
+brew install podman-compose
+
+# Start Podman Machine if stopped; keep Ollama running on your Mac
+podman machine list
+ollama list
+
+# Start all three services
+podman compose up -d --build
+
+# Check status, identity, and Ollama connectivity
+podman compose ps
+curl -sS http://localhost:8101/info
+curl -i http://localhost:8101/health
+
+# Ask Agent 1 a question; use 8102 or 8103 for other agents
+curl -sS http://localhost:8101/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"task":"What is the capital of France? Answer directly."}'
+
+# Follow Agent 1 logs; Control+C only stops following
+podman compose logs -f agent-01
+
+# Stop/remove Compose containers, retaining files and image
+podman compose down
+```
+
+Keep your existing `.env` and set `OLLAMA_MODEL` to an installed model. Never paste
+credentials into curl tasks. Compose loads Agent 1 from `config/agent.yaml`, Agent 2
+from `config/agent-02.yaml`, and Agent 3 from `config/agent-03.yaml`. Your fourth YAML
+remains available but is not part of this three-agent stack. Old standalone CLI
+containers are separate; Compose does not stop or remove them.
+
+One task runs per agent; overlapping requests return HTTP 409 `busy`. HTTP services
+cannot approve sending email: they return `approval_required` and send nothing,
+even with `EMAIL_DRY_RUN=false`. Read-email still works with configured IMAP credentials.
+Use the interactive CLI for email approval:
+
+```bash
+podman run --rm -it --env-file .env \
+  --read-only --cap-drop=all --security-opt=no-new-privileges \
+  localhost/local-agent:stage2
+```
+
+After `.env` or YAML edits: `podman compose up -d --force-recreate`.
+After code edits: `podman compose up -d --build`.
+Do not delete YAML files when rebuilding. Read `local-agent-platform/README.md`
+for the architecture, complete endpoint contract, tests, and local-access limitations.
+
+---
+
 For macOS / Apple Silicon, Podman, native Ollama, and this Stage 1 application.
 Prepared September 21, 2026. Commands use your new project location.
 

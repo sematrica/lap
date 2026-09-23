@@ -1,8 +1,271 @@
-# Local Containerized AI Agent — Stage 1
+# Local Agent Platform — Stage 2
 
-One Python agent, one configurable Ollama endpoint, and one controlled SMTP email
-tool. Python 3.12+ is required. Runtime dependencies are only `httpx` and PyYAML;
-tests use Python's built-in `unittest`. Email defaults to **dry-run**.
+Three independent agents can now run as background HTTP services with one Compose
+command. The existing interactive CLI, bounded reasoning loop, Ollama client,
+tool registry, and tools remain available. Python 3.12+ is required. Dependencies
+are httpx, PyYAML, FastAPI, and Uvicorn (plus their dependencies). Tests use unittest.
+
+## Stage 2 architecture
+
+```text
+macOS
+├── Ollama host service :11434 (shared model server)
+├── curl → localhost:8101 / :8102 / :8103
+└── Podman Machine (Linux VM)
+    └── Compose manages three independent containers, without a pod
+        ├── agent-01 :8000 ← config/agent.yaml
+        ├── agent-02 :8000 ← config/agent-02.yaml
+        └── agent-03 :8000 ← config/agent-03.yaml
+            Each: HTTP → Agent → Ollama client
+                            └→ ToolRegistry → approval policy → tool
+            Ollama URL: http://host.containers.internal:11434
+```
+
+An **image** is the packaged Python application. A **container** is a running copy
+of that image. An **agent** is that copy's identity, instructions, model, and tool
+allowlist, loaded from YAML. **Compose** starts and manages the containers together;
+it does not coordinate their reasoning. **Ollama** remains a separate service on
+your Mac. Each agent has its own task lock and conversation; models share the same
+Ollama server and compete for its resources.
+
+The repository root is `/Users/mac14/Developer/LocalAgentPlatform`. The application
+stays in its existing `local-agent-platform` subfolder to preserve paths and tooling.
+
+## Start all three agents
+
+Run these commands in a macOS terminal, not inside an agent prompt:
+
+```bash
+cd /Users/mac14/Developer/LocalAgentPlatform/local-agent-platform
+podman machine list
+podman compose version
+ollama list
+```
+
+If the Podman machine is stopped, run `podman machine start`. If Compose reports
+that no provider exists, run `brew install podman-compose`. Podman's Compose command
+uses an [external provider](https://docs.podman.io/en/latest/markdown/podman-compose.1.html).
+Open the Ollama application, or use `ollama serve` if it is not already running.
+
+Keep your existing `.env`. For a first installation only, copy `.env.example` to
+`.env` and fill in your settings. Set `OLLAMA_MODEL` to an exact installed model
+from `ollama list`, for example `llama3.1:latest`. This overrides all three YAML model
+values; remove that environment entry if you want different models per YAML.
+Compose supplies the host Ollama address explicitly. SMTP/IMAP/NASA credentials
+remain in `.env`, never in YAML or the image. Do not share `podman compose config`
+output: a provider can expand environment secrets into it.
+
+```bash
+podman compose up -d --build
+podman compose ps
+```
+
+Subsequent starts without code changes: `podman compose up -d`.
+Containers use Compose-generated names such as `lap_agent-01_1`; use service names
+(`agent-01`) with Compose commands. Old standalone containers named `agent-01` etc.
+are separate and are not replaced by Compose. Stop them if you no longer need them:
+
+```bash
+podman stop agent-01 agent-02 agent-03 agent-04
+```
+
+That optional command stops only the old standalone containers. Their files and
+YAML configurations are retained. All Compose services reuse `localhost/local-agent:stage2`.
+
+## Use the HTTP endpoints
+
+| Agent | Base URL | YAML file |
+| --- | --- | --- |
+| agent-01 | `http://localhost:8101` | `config/agent.yaml` |
+| agent-02 | `http://localhost:8102` | `config/agent-02.yaml` |
+| agent-03 | `http://localhost:8103` | `config/agent-03.yaml` |
+
+Check identity and health:
+
+```bash
+curl -sS http://localhost:8101/info
+curl -i http://localhost:8101/health
+curl -i http://localhost:8102/health
+curl -i http://localhost:8103/health
+```
+
+Submit a task to Agent 1 (change the port for another agent):
+
+```bash
+curl -sS http://localhost:8101/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"task":"What is the capital of France? Answer directly."}'
+```
+
+Example response:
+
+```json
+{"agent":"agent-01","status":"completed","result":"Paris.","task_id":"generated-uuid"}
+```
+
+Web and inbox tools work through the same endpoint and their existing protections:
+
+```bash
+curl -sS http://localhost:8101/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"task":"Summarize https://example.com and cite the URL."}'
+
+curl -sS http://localhost:8101/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"task":"Read my latest 5 emails and summarize them."}'
+```
+
+Inbox reading requires IMAP settings and reads real email even when EMAIL_DRY_RUN
+is true. Only explicitly enabled tools are available. Nothing executes arbitrary
+shell commands. Tools remain behind the original validation and registry boundary.
+
+Requests wait synchronously for a result; there is no queue or task polling endpoint.
+Each agent accepts one task at a time. Another request receives HTTP 409 with
+`status: busy`; another agent can still accept work. Each task gets a new conversation.
+Request bodies must be JSON with only `task`, at most 32 KiB and 16,000 task characters.
+Empty/malformed tasks return 422, oversized bodies 413, and incorrect content types 415.
+
+`GET /health` returns 200 when Ollama is reachable and the configured model is
+installed. It uses a separate connection with a 3-second timeout, remains available
+while a task runs, and returns 503 with `alive: true` when Ollama/model verification
+fails. It is not a model-generation benchmark and does not log in to IMAP/SMTP or
+call NASA. If another health probe is running, it returns 503 with `status: checking`.
+The service stays alive and can recover after Ollama returns. Task-time Ollama errors
+return 503; other controlled task failures return 422, and unexpected failures return
+a sanitized 500. `/info` exposes identity, model, tools, and approval policy only.
+
+## Approval in a background service
+
+HTTP mode cannot obtain terminal approval. When a validated request reaches any
+approval-required tool, the task immediately stops with HTTP 409:
+
+```json
+{"agent":"agent-01","status":"approval_required","result":"HTTP services cannot obtain human approval. No email was sent. Run this task through the interactive CLI to review and approve it.","task_id":"generated-uuid","code":"approval_required"}
+```
+
+This applies to both real and dry-run email. There is no approval bypass field,
+pending approval store, approval link, or automatic resume. Earlier read operations
+in a multi-step task may already have completed. To send an email, launch the existing
+interactive CLI with the same image and explicitly review its prompt:
+
+```bash
+podman run --rm -it --env-file .env \
+  --read-only --cap-drop=all --security-opt=no-new-privileges \
+  localhost/local-agent:stage2
+```
+
+The image still defaults to the CLI; Compose explicitly selects the HTTP entrypoint.
+`EMAIL_DRY_RUN` controls CLI sending, not service approval or inbox reading.
+
+## Logs, stopping, and updates
+
+```bash
+# All agents; Control+C stops following logs, not the services
+podman compose logs -f
+
+# Agent 1 only
+podman compose logs -f agent-01
+
+# Stop and remove this Compose stack (source, .env, YAML and image stay)
+podman compose down
+```
+
+Agent events remain JSON on stderr. Task events carry the same generated `task_id`
+returned in the response. Tasks, tool arguments, email content, credentials, and
+model answers are not written to service logs. HTTP access logs are disabled.
+Podman/Compose may add their own prefixes when displaying logs.
+
+After source/dependency changes: `podman compose up -d --build`.
+After `.env` or YAML edits: `podman compose up -d --force-recreate`.
+A simple restart does not load new environment values; YAML is read at process startup.
+Do not delete configurations when rebuilding containers.
+
+## Security and Stage 2 limitations
+
+Host ports bind only to `127.0.0.1`. The service rejects browser Origin headers and
+unexpected Host names, has no CORS permission, and marks responses `no-store`.
+There is no authentication in this local development stage: other local processes
+and users able to access these ports can submit tasks, including reading the configured
+mailbox. Other containers on the Compose network are also within the trust boundary.
+Do not publish the ports publicly, add a public proxy, or remove these protections.
+Compose injects the same `.env` into each agent; choose per-agent env files if account
+separation is needed. Podman administrators can inspect container environment values.
+
+Containers run as UID 10001 with read-only filesystems, read-only YAML mounts,
+all capabilities dropped, and no privilege escalation. No secret is copied into
+the image. There is no Podman socket mount, pod, orchestrator, database, broker,
+dashboard, memory, RAG, MCP, or cloud deployment.
+
+Exactly one Uvicorn worker must run per container; multiple workers would have
+independent busy locks. A task remains busy if its caller disconnects, until its
+bounded loop finishes. There is no cancellation, deduplication, durable task history,
+or recovery after a container restart. Avoid automatically retrying timed-out tasks.
+Individual HTTP/tool timeouts and iteration limits still apply; a multi-step task
+can take several minutes. A forced shutdown can interrupt work. Restart policies
+restart exited containers, not merely unhealthy ones, and require Podman Machine to run.
+
+To add Agent 4 later, give `config/agent-04.yaml` its intended name/prompt and add
+a Compose service using the shared `*agent` settings, port 8104, and that YAML mount.
+No Python copy or orchestrator is needed.
+
+## Project structure and tests
+
+```text
+LocalAgentPlatform/
+├── .gitignore
+├── AGENTS.md
+├── CHEATSHEET.md
+└── local-agent-platform/
+    ├── compose.yaml            # Three persistent services
+    ├── Containerfile           # Shared non-root image; CLI default
+    ├── requirements.txt
+    ├── .env.example            # Copy only on first setup
+    ├── config/agent.yaml       # Agent 1
+    ├── config/agent-02.yaml    # Agent 2
+    ├── config/agent-03.yaml    # Agent 3
+    ├── config/agent-04.yaml    # Optional CLI configuration
+    ├── src/
+    │   ├── service.py          # HTTP lifecycle, validation, busy lock
+    │   ├── runtime.py          # Shared registry construction
+    │   ├── main.py             # Existing interactive CLI
+    │   ├── agent.py            # Existing bounded reasoning loop
+    │   ├── approval.py         # CLI approval and service stop policy
+    │   ├── llm_client.py
+    │   ├── config.py
+    │   ├── logger.py
+    │   ├── errors.py
+    │   └── tools/              # Registry, SMTP, web, IMAP, NASA
+    ├── tests/                 # Original tests plus test_service.py
+    ├── README.md
+    └── VERIFICATION.md
+```
+
+Finder `.DS_Store` metadata and `*.save` editor backups are ignored. Existing
+backups are preserved locally, including `.env.save` (potential credentials) and
+`config/agent-02.yaml.save` (old YAML plus a pasted shell command). Do not use the
+backup as an agent configuration or include it in the image. Git ignores do not
+erase previously committed data from repository history.
+
+From the application folder with Python 3.12+:
+
+```bash
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+Tests mock Ollama, SMTP, IMAP, and external HTTP. They send no real email and do not
+require a running Ollama server. Service tests cover endpoints, validation, busy
+behavior, dependency recovery, approval refusal, allowlisting, and secret omission.
+FastAPI's [lifespan testing pattern](https://fastapi.tiangolo.com/advanced/testing-events/)
+is used to open and close clients predictably.
+
+## Existing tools and interactive CLI reference
+
+The sections below document tools and the original standalone CLI workflow.
+Their `local-agent:stage1` examples are historical; use `localhost/local-agent:stage2`
+to run the same CLI with the current image. The Compose workflow above is the default
+for persistent agents. HTTP mode never prompts for approval or sends email.
 
 
 

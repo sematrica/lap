@@ -8,4 +8,6 @@ RUN pip install --no-cache-dir -r requirements.txt \
 COPY src/ ./src/
 COPY config/agent.yaml ./config/agent.yaml
 USER 10001:10001
+# CLI remains the image default; Compose selects python -m src.service.
+EXPOSE 8000
 ENTRYPOINT ["python", "-m", "src.main"]

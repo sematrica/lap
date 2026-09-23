@@ -7,3 +7,5 @@
 !config/agent.yaml
 **/__pycache__/
 **/*.pyc
+**/.DS_Store
+**/*.save

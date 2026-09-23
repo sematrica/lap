@@ -1,4 +1,43 @@
-# Stage 1 verification — 2026-09-21
+# LAP verification
+
+## Stage 2 persistent runtime — 2026-09-22 (local time)
+
+- All 76 unit tests passed: the original 62 tests plus 14 service tests. Ollama,
+  SMTP, IMAP, and external HTTP are mocked. Coverage includes service health and
+  identity, malformed/empty/oversized bodies, successful tasks, task IDs, no history
+  between tasks, overlapping task rejection, health during a task, Ollama recovery,
+  approval refusal in both dry-run and real modes, allowlisting, secret omission,
+  browser-Origin/Host rejection, and transport cleanup.
+- Test environment: Python 3.12, FastAPI 0.141.1, Uvicorn 0.53.0, httpx 0.28.1,
+  PyYAML 6.0.3. Starlette emits a non-failing warning about future migration of
+  its TestClient to httpx2; existing httpx transport behavior is preserved.
+- Initial sandboxed Podman access failed with `operation not permitted`. Retried
+  with approved host access. Podman was running, but no Compose provider existed.
+  Installed Homebrew podman-compose 1.6.0 and its Homebrew dependencies.
+- `podman compose -p lap-stage2-check up -d --build` successfully built and ran
+  three temporary services using the same image. No SMTP/IMAP credentials were
+  supplied. Existing standalone agent-01 through agent-04 were left running.
+- All three localhost `/health` endpoints returned HTTP 200 with `ollama: ready`.
+  All three `/info` endpoints returned their distinct YAML names and the configured
+  test model `llama3.1:latest`.
+- Live Agent 1 HTTP task returned `The capital of France is Paris.` with a generated
+  task ID. Logs correlate the reasoning events using that ID without task/result text.
+- A live HTTP email request returned HTTP 409 `approval_required`; logs ended at
+  `approval_unavailable` without `tool_started`. No email was sent.
+- The final image built from the Developer repository is
+  `3cff57243b649ce8ea5cb0a641a1a855427aa70abf6ddd87267879c5f2666a9a`, tagged
+  `localhost/local-agent:stage2`. All 76 tests also passed against the delivered
+  source from that repository, using the temporary Python dependency environment.
+- The temporary `lap-stage2-check` stack was removed after verification. Its ports
+  are available for the user's normal `podman compose up -d --build` workflow.
+- Container inspection confirmed all three share one image ID, use UID 10001:10001,
+  have read-only root filesystems, publish only 127.0.0.1:8101–8103, and have no pod.
+- The private project `.env` and `.env.save` were not read or changed. The saved
+  YAML backup was inspected and preserved locally. Finder metadata and editor
+  backups are ignored; previously tracked artifacts are untracked without deleting
+  their local files. The application folder remains nested to avoid path breakage.
+
+## Stage 1 verification — 2026-09-21
 
 ## Read-only inbox and NASA feed tools — 2026-09-22
 

@@ -1,0 +1,41 @@
+name: lap
+
+# Disable pod creation when using the podman-compose provider.
+x-podman:
+  in_pod: false
+
+x-agent: &agent
+  image: localhost/local-agent:stage2
+  build:
+    context: .
+    dockerfile: Containerfile
+  entrypoint: ["python", "-m", "src.service"]
+  env_file: .env
+  environment:
+    OLLAMA_BASE_URL: http://host.containers.internal:11434
+  read_only: true
+  user: "10001:10001"
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+  stop_grace_period: 30s
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).close()"]
+    interval: 30s
+    timeout: 6s
+    retries: 3
+    start_period: 15s
+
+services:
+  agent-01:
+    <<: *agent
+    ports: ["127.0.0.1:8101:8000"]
+    volumes: ["./config/agent.yaml:/app/config/agent.yaml:ro"]
+  agent-02:
+    <<: *agent
+    ports: ["127.0.0.1:8102:8000"]
+    volumes: ["./config/agent-02.yaml:/app/config/agent.yaml:ro"]
+  agent-03:
+    <<: *agent
+    ports: ["127.0.0.1:8103:8000"]
+    volumes: ["./config/agent-03.yaml:/app/config/agent.yaml:ro"]
