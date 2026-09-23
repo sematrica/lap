@@ -1,5 +1,49 @@
 # Stage 1 verification — 2026-09-21
 
+## Read-only inbox and NASA feed tools — 2026-09-22
+
+Added `read_email` (verified-TLS IMAP INBOX, read-only selection, BODY.PEEK) and
+`nasa_neo_feed` (fixed HTTPS NASA endpoint, validated dates, environment API key).
+Both are enabled in the four existing YAML configurations. No private `.env` files
+were read or changed, and no existing containers were stopped or replaced.
+
+- **62 unit tests passed** in the Developer project, including MIME handling,
+  unread-preserving commands, skipped oversized messages, credential redaction,
+  fixed NASA endpoint, date limits, rate limits, malformed responses, tool gating,
+  model round trips, and rejection of invented answers after errors/missing calls.
+- The initial direct NASA request succeeded with DEMO_KEY: 21 objects for
+  2015-09-07 through 2015-09-08 (one flagged potentially hazardous).
+- An early container test failed validation because llama3.1 supplied limit as a
+  numeric string, then fabricated an answer. Numeric strings are now normalized
+  before bounds validation, and unresolved tool errors suppress model final prose.
+- A second test exposed routing that missed the exact `nasa_neo_feed` name.
+  Routing was fixed; explicit inbox reads/dated NASA requests now require actual
+  tool results, with one reminder and a safe error if the model omits the call.
+- Final Podman build passed: image
+  `07e96b5b1bf931111364a1caace3e01374a6c554b14606fc403af306e0bf0592`.
+- Final live container + Ollama test passed in two model turns: NASA tool_requested,
+  tool_completed/read, 21 objects, and accurate details for three returned objects.
+- Yahoo inbox access was tested with mocks only. No mailbox contents were accessed,
+  no messages were marked read/deleted, and no real email was sent during development.
+  Live account verification requires IMAP_USERNAME and IMAP_PASSWORD supplied by
+  the user in `.env`, then an explicit read request in their agent session.
+
+Final command executed:
+
+```sh
+podman run --rm \
+  -e OLLAMA_BASE_URL=http://host.containers.internal:11434 \
+  -e OLLAMA_MODEL=llama3.1:latest -e EMAIL_DRY_RUN=true \
+  --read-only --cap-drop=all --security-opt=no-new-privileges \
+  local-agent:stage1 \
+  --task 'Use nasa_neo_feed for 2015-09-07 through 2015-09-08. Tell me the total count and list 3 objects. Do not read or send email.'
+```
+
+Model interpretation is still fallible even after a successful tool result. The
+new checks prevent unchecked final answers when required data was never retrieved;
+they do not prove the model's summary is factually correct in every case.
+
+
 ## Webpage completion fix — 2026-09-22
 
 The Context-AI-DataSet URL returned HTTP 200 and a 6,554-byte body, but the reader

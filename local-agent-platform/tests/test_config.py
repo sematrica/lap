@@ -10,7 +10,7 @@ class ConfigTests(unittest.TestCase):
     def test_yaml_and_safe_defaults(self):
         config = load_config(env={})
         self.assertEqual(config.name, "agent-01")
-        self.assertEqual(config.tools, ("read_webpage", "send_email"))
+        self.assertEqual(config.tools, ("read_email", "nasa_neo_feed", "read_webpage", "send_email"))
         self.assertTrue(config.dry_run)
         self.assertEqual(config.base_url, "http://host.containers.internal:11434")
 
@@ -45,3 +45,21 @@ class ConfigTests(unittest.TestCase):
                 path.write_text(value)
                 with self.subTest(value=value), self.assertRaises(AgentError):
                     load_config(path, env={})
+
+
+class IntegrationConfigTests(unittest.TestCase):
+    def test_integration_defaults_and_overrides(self):
+        config = load_config(env={})
+        self.assertEqual(config.imap.host, "imap.mail.yahoo.com")
+        self.assertEqual(config.imap.port, 993)
+        self.assertEqual(config.nasa_api_key, "DEMO_KEY")
+        config = load_config(env={"IMAP_USERNAME": "private-user", "IMAP_PASSWORD": "private-pass",
+                                  "NASA_API_KEY": "private-key", "NASA_TIMEOUT_SECONDS": "60"})
+        self.assertEqual(config.imap.username, "private-user")
+        self.assertEqual(config.nasa_timeout, 60)
+        self.assertNotIn("private", repr(config))
+        self.assertNotIn("private", repr(config.imap))
+        for env in ({"IMAP_PORT": "0"}, {"IMAP_TIMEOUT_SECONDS": "NaN"}, {"NASA_API_KEY": ""},
+                    {"NASA_TIMEOUT_SECONDS": "0"}):
+            with self.assertRaises(AgentError):
+                load_config(env=env)

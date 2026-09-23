@@ -38,6 +38,11 @@ class ToolRegistry:
         return [tool.definition for name, tool in self.tools.items()
                 if name in self.enabled and (task is None or tool.available_for(task))]
 
+    def required_results(self, task):
+        # Optional policy for data requests that must not be answered from model memory.
+        return {name for name, tool in self.tools.items() if name in self.enabled
+                and getattr(tool, "requires_result_for", lambda task: False)(task)}
+
     def dispatch(self, name, arguments, iteration, *, task):
         # Do not log untrusted names or arguments; they may contain sensitive data.
         known = name in self.tools and name in self.enabled

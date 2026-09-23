@@ -23,6 +23,15 @@ class SMTPConfig:
 
 
 @dataclass(frozen=True)
+class IMAPConfig:
+    host: str = "imap.mail.yahoo.com"
+    port: int = 993
+    username: str = field(default="", repr=False)
+    password: str = field(default="", repr=False)
+    timeout: float = 30
+
+
+@dataclass(frozen=True)
 class Config:
     name: str
     role: str
@@ -35,6 +44,9 @@ class Config:
     max_iterations: int = 10
     dry_run: bool = True
     smtp: SMTPConfig = field(default_factory=SMTPConfig, repr=False)
+    imap: IMAPConfig = field(default_factory=IMAPConfig, repr=False)
+    nasa_api_key: str = field(default="DEMO_KEY", repr=False)
+    nasa_timeout: float = 30
 
 
 def invalid(message):
@@ -97,10 +109,20 @@ def load_config(path="config/agent.yaml", env=None):
         use_tls=boolean(env, "SMTP_USE_TLS", True),
         timeout=number(env, "SMTP_TIMEOUT_SECONDS", 30, 1, 300),
     )
+    imap = IMAPConfig(
+        host=env.get("IMAP_HOST", "imap.mail.yahoo.com").strip(),
+        port=number(env, "IMAP_PORT", 993, 1, 65535, integer=True),
+        username=env.get("IMAP_USERNAME", ""), password=env.get("IMAP_PASSWORD", ""),
+        timeout=number(env, "IMAP_TIMEOUT_SECONDS", 30, 1, 300),
+    )
+    nasa_key = env.get("NASA_API_KEY", "DEMO_KEY").strip()
+    if not nasa_key or any(ord(c) < 33 or ord(c) > 126 for c in nasa_key):
+        invalid("NASA_API_KEY must be a nonempty ASCII token without whitespace.")
     return Config(
         **{k: data[k] for k in ("name", "role", "description", "system_prompt")},
         model=model, tools=tuple(enabled), base_url=base_url,
         timeout=number(env, "OLLAMA_TIMEOUT_SECONDS", 120, 1, 3600),
         max_iterations=number(env, "MAX_AGENT_ITERATIONS", 10, 1, 100, integer=True),
-        dry_run=boolean(env, "EMAIL_DRY_RUN", True), smtp=smtp,
+        dry_run=boolean(env, "EMAIL_DRY_RUN", True), smtp=smtp, imap=imap,
+        nasa_api_key=nasa_key, nasa_timeout=number(env, "NASA_TIMEOUT_SECONDS", 30, 1, 300),
     )

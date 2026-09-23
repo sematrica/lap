@@ -5,6 +5,128 @@ tool. Python 3.12+ is required. Runtime dependencies are only `httpx` and PyYAML
 tests use Python's built-in `unittest`. Email defaults to **dry-run**.
 
 
+
+## Read email and call NASA NeoWs
+
+Two dedicated tools extend the original runtime. Both are enabled in the supplied
+Agent-01 through Agent-04 YAML files; remove a tool name from `tools` to disable it.
+No new packages are required. Known numeric/boolean strings emitted by local models
+are normalized and then checked against the same limits. If a tool fails and the
+model does not correct the call, the runtime reports the unresolved error instead
+of showing a potentially invented successful answer. Explicit inbox reads and dated
+NASA requests also require an actual tool result before a final answer; the runtime
+allows one reminder if the model skips the call, then reports an error. Neither tool performs writes or requires the email
+send-approval prompt. The existing `send_email` approval remains mandatory.
+
+### Read Yahoo INBOX
+
+Add these lines to your private `.env`, replacing placeholders locally:
+
+```dotenv
+IMAP_HOST=imap.mail.yahoo.com
+IMAP_PORT=993
+IMAP_USERNAME=your-address@yahoo.com
+IMAP_PASSWORD=your-yahoo-app-password
+IMAP_TIMEOUT_SECONDS=30
+```
+
+Yahoo uses IMAP over TLS on port 993 with an app password. See
+[Yahoo's server settings](https://help.yahoo.com/kb/SLN4075.html).
+The sending and receiving accounts can be the same, but SMTP credentials are not
+automatically reused. Set IMAP credentials explicitly. Do not paste them into a
+task or source file. Recreate the container after changing `.env`.
+
+At the agent prompt:
+
+```text
+Read my latest 5 emails and summarize them.
+```
+
+```text
+Show my latest 3 unread emails.
+```
+
+The runtime offers `read_email` for tasks with email/inbox words and a reading,
+listing, or summary keyword. That routing is not a complete natural-language intent
+classifier. Each invocation validates `limit` (1–10, default 5) and `unread_only`
+(boolean, default false). The only mailbox is INBOX; there are no arbitrary IMAP
+commands, folder names, or account credentials in tool arguments.
+
+The connection verifies TLS, selects INBOX with `readonly=True`, and fetches with
+`BODY.PEEK` so unread flags remain unchanged. It never calls STORE, EXPUNGE, DELETE,
+or mailbox CLOSE. It logs out after each invocation. Returned metadata includes
+sender, subject, date, UID, and up to 6,000 body characters per message, newest UID
+first. Counts/truncation/skips are included so summaries can disclose omissions.
+Messages larger than 256 KiB, including attachments, are skipped. Small raw MIME
+messages can include attachment bytes, but attachments are never opened, executed,
+saved, or returned to the model. HTML email is reduced to text; no remote images,
+links, or tracking pixels are fetched.
+
+Reading sends the selected email contents to the **configured Ollama endpoint**
+for summarization. In the normal setup this is your local Mac; if you change the
+endpoint to another machine, that machine receives the content. Structured audit
+logs omit message contents, but the agent's final summary is visible in terminal
+and container logs. `EMAIL_DRY_RUN` governs sending only; it does not simulate or
+prevent inbox reads. Mail is treated as untrusted data, never authority to send
+email or call other tools. A malicious message's recipient does not override the
+existing requirement for the recipient to appear in the user's original task.
+
+### Call the NASA asteroid feed
+
+The `nasa_neo_feed` tool calls only:
+
+```text
+https://api.nasa.gov/neo/rest/v1/feed
+```
+
+It accepts `start_date`, `end_date` (YYYY-MM-DD), and optional `limit` (1–50, default
+20). End must be on/after start and no more than seven days later. No arbitrary
+URL, method, header, or API key can be supplied by the model. Redirects are rejected.
+Responses are limited to 2 MiB with a configurable socket timeout. Returned fields
+include counts, names, IDs, approach dates, estimated diameter in meters, speed in
+km/s, miss distance in km, and NASA's potentially-hazardous flag. That flag is a
+classification, not a prediction of an Earth impact. Detail lists may be truncated;
+counts describe the full returned feed.
+
+```dotenv
+NASA_API_KEY=DEMO_KEY
+NASA_TIMEOUT_SECONDS=30
+```
+
+These are defaults even if the variables are absent. A personal NASA key is optional;
+put it in `.env`, never in the prompt. NASA's documented DEMO_KEY limits are 30
+requests/hour and 50/day per IP. See [NASA authentication and rate limits](https://api.nasa.gov/assets/html/authentication.html).
+No automatic retries are made for rate limits. Output source links omit the key.
+
+Try your supplied date range:
+
+```text
+Use nasa_neo_feed for 2015-09-07 through 2015-09-08. Summarize the total count and list 5 objects with their miss distances.
+```
+
+The webpage reader handles HTML, while this dedicated tool handles NASA's JSON API.
+Give explicit dates; the agent is instructed to ask for them if absent.
+
+### Upgrade existing containers
+
+Build once from the application folder, then recreate each agent using its usual
+name, `.env`, and (for Agent-02/03/04) mounted YAML file. A restart alone keeps old
+code and environment. To safely test the rebuilt image without touching running
+agents or reading email:
+
+```sh
+podman run --rm \
+  -e OLLAMA_BASE_URL=http://host.containers.internal:11434 \
+  -e OLLAMA_MODEL=llama3.1:latest -e EMAIL_DRY_RUN=true \
+  --read-only --cap-drop=all --security-opt=no-new-privileges \
+  local-agent:stage1 \
+  --task 'Use nasa_neo_feed for 2015-09-07 through 2015-09-08 and summarize the count.'
+```
+
+No `.env` is used in this NASA test; it relies on DEMO_KEY and cannot authenticate
+to Yahoo. Inbox behavior is covered by mocked unit tests; live mailbox verification
+must be done after you configure IMAP and request a read in your own agent session.
+
 ## Public webpage reading (added after Stage 1)
 
 Agents can now read static public HTML/text from URLs you put in the current task.

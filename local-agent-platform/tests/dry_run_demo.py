@@ -17,6 +17,8 @@ from src.logger import EventLogger
 from src.tools.email_tool import EmailTool
 from src.tools.registry import ToolRegistry
 from src.tools.web_tool import WebTool
+from src.tools.inbox_tool import InboxTool
+from src.tools.nasa_tool import NasaTool
 
 
 def main():
@@ -26,6 +28,8 @@ def main():
     registry.register(EmailTool(config.smtp, True, logger))
 
     registry.register(WebTool())
+    registry.register(InboxTool(config.imap))
+    registry.register(NasaTool())
 
     def reply(request):
         messages = json.loads(request.content)["messages"]

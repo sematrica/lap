@@ -877,3 +877,84 @@ To disable webpage reading for an agent, remove `read_webpage` from its YAML too
 list. For mounted YAML, restart the agent; for the default YAML copied into the
 image, rebuild and recreate. Large/compressed/dynamic pages can return a clear
 error rather than content. See the README's webpage section for precise limits.
+
+
+## 20. Read Yahoo email and use the NASA API
+
+These tools require recreating your containers with the updated image. They are
+already enabled in Agent-01 through Agent-04 YAML configurations.
+
+### Set up inbox reading
+
+```sh
+cd /Users/mac14/Developer/LocalAgentPlatform/local-agent-platform
+nano .env
+```
+
+Add these settings, replacing placeholders privately with your Yahoo address and
+app password. SMTP settings remain unchanged; IMAP credentials are separate.
+
+```dotenv
+IMAP_HOST=imap.mail.yahoo.com
+IMAP_PORT=993
+IMAP_USERNAME=your-address@yahoo.com
+IMAP_PASSWORD=your-yahoo-app-password
+IMAP_TIMEOUT_SECONDS=30
+NASA_API_KEY=DEMO_KEY
+NASA_TIMEOUT_SECONDS=30
+```
+
+Save with Ctrl+O, Enter, Ctrl+X. After recreating the container, enter:
+
+```text
+Read my latest 5 emails and summarize them.
+```
+
+Or:
+
+```text
+Show my latest 3 unread emails.
+```
+
+Reading does not mark mail as read, delete anything, or send replies. The reader
+uses only INBOX, returns up to 10 messages per invocation, and skips messages over
+256 KiB. It ignores attachments (small raw MIME messages may contain attachment
+bytes, but they are never processed or saved). Summaries use up to 6,000 characters
+of each body. Missing, skipped, or shortened content is reported to the model.
+
+Read operations do not require a confirmation prompt. `EMAIL_DRY_RUN=true` protects
+against sending; it does **not** prevent reading your real inbox. Email content is
+sent to the configured Ollama endpoint and final summaries may appear in container
+logs. Keep the endpoint local for the intended setup.
+
+### Query the NASA asteroid feed
+
+DEMO_KEY works without signup, so NASA can be tested before configuring email:
+
+```text
+Use nasa_neo_feed for 2015-09-07 through 2015-09-08. Tell me the total count and list 5 objects with their miss distances.
+```
+
+The tool calls only NASA's NeoWs feed. Use YYYY-MM-DD dates with end at most seven
+days after start. It returns structured asteroid data, not an HTML webpage. A
+personal key can replace DEMO_KEY in `.env` for higher rate limits. Never put a
+private key in an agent task. If NASA reports a rate limit, wait before retrying.
+
+### Recreate Agent-01 after setting up the new tools
+
+Finish pending operations first. In the application folder:
+
+```sh
+podman stop agent-01
+podman rm agent-01
+podman run -it --name agent-01 --env-file .env \
+  -e EMAIL_DRY_RUN=true \
+  --read-only --cap-drop=all --security-opt=no-new-privileges \
+  local-agent:stage1
+```
+
+This example forces sending into dry-run while allowing inbox reads and NASA calls.
+To restore real sending, recreate without the forced dry-run override and use your
+saved `.env` setting. For Agent-02/03/04 use the matching name and YAML mount from
+earlier sections. To disable a tool for one agent, remove `read_email` or
+`nasa_neo_feed` from its YAML tools list.

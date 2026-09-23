@@ -12,6 +12,8 @@ from .logger import EventLogger
 from .tools.email_tool import EmailTool
 from .tools.registry import ToolRegistry
 from .tools.web_tool import WebTool
+from .tools.inbox_tool import InboxTool
+from .tools.nasa_tool import NasaTool
 
 
 def main(argv=None):
@@ -29,6 +31,8 @@ def main(argv=None):
         registry = ToolRegistry(config.tools, config.name, InteractiveApproval(), logger)
         registry.register(EmailTool(config.smtp, config.dry_run, logger))
         registry.register(WebTool())
+        registry.register(InboxTool(config.imap))
+        registry.register(NasaTool(config.nasa_api_key, config.nasa_timeout))
         registry.definitions()
         client = OllamaClient(config.base_url, config.model, config.timeout)
         client.verify()

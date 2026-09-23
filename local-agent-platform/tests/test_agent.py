@@ -12,6 +12,8 @@ from src.main import main
 from src.tools.email_tool import EmailTool
 from src.tools.registry import ToolRegistry
 from src.tools.web_tool import WebTool
+from src.tools.inbox_tool import InboxTool
+from src.tools.nasa_tool import NasaTool
 
 EMAIL = {"to": "person@example.com", "subject": "Hello", "body": "Report ready."}
 CALL = {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "send_email", "arguments": EMAIL}}]}
@@ -29,6 +31,8 @@ class AgentTests(unittest.TestCase):
         self.registry = ToolRegistry(self.config.tools, self.config.name, self.approval, self.logger)
         self.registry.register(EmailTool(self.config.smtp, True, self.logger))
         self.registry.register(WebTool())
+        self.registry.register(InboxTool(self.config.imap))
+        self.registry.register(NasaTool())
         self.output = []
         self.agent = Agent(self.config, self.client, self.registry, self.logger, self.output.append)
 
@@ -55,8 +59,9 @@ class AgentTests(unittest.TestCase):
     @patch("src.tools.email_tool.smtplib.SMTP")
     def test_unsolicited_email_cannot_reach_approval(self, smtp):
         self.client.chat.side_effect = [CALL, {"role": "assistant", "content": "Paris."}]
-        answer = self.agent.run("What is the capital of France? Do not compose or send an email.")
-        self.assertEqual(answer, "Paris.")
+        with self.assertRaises(AgentError) as caught:
+            self.agent.run("What is the capital of France? Do not compose or send an email.")
+        self.assertEqual(caught.exception.code, "unresolved_tool_error")
         self.approval.approve.assert_not_called()
         smtp.assert_not_called()
         for call in self.client.chat.call_args_list:
@@ -68,7 +73,8 @@ class AgentTests(unittest.TestCase):
     @patch("src.tools.email_tool.smtplib.SMTP")
     def test_invented_recipient_cannot_reach_approval(self, smtp):
         self.client.chat.side_effect = [CALL, FINAL]
-        self.agent.run("Send a message to someone-else@example.com.")
+        with self.assertRaises(AgentError):
+            self.agent.run("Send a message to someone-else@example.com.")
         self.approval.approve.assert_not_called()
         smtp.assert_not_called()
 
@@ -88,6 +94,58 @@ class AgentTests(unittest.TestCase):
         self.assertIn("untrusted source data", messages[0]["content"])
         self.approval.approve.assert_not_called()
         smtp.assert_not_called()
+
+    def test_inbox_and_nasa_results_reach_model(self):
+        for name, args, task, result in (
+            ("read_email", {"limit": 1}, "Summarize my latest email", {
+                "status": "read", "message": "Read one message.",
+                "messages": [{"subject": "Report", "untrusted_body": "The report is ready."}]}),
+            ("nasa_neo_feed", {"start_date": "2015-09-07", "end_date": "2015-09-08"},
+                "Get NASA feed for 2015-09-07 to 2015-09-08", {
+                "status": "read", "message": "NASA data retrieved.", "total_count": 21})):
+            with self.subTest(tool=name), patch.object(self.registry.tools[name], "execute", return_value=result):
+                self.client.chat.side_effect = [{"role": "assistant", "content": "", "tool_calls": [
+                    {"function": {"name": name, "arguments": args}}]}, FINAL]
+                self.agent.run(task)
+                messages = self.client.chat.call_args.args[0]
+                returned = next(message for message in messages if message["role"] == "tool")
+                self.assertEqual(returned["tool_name"], name)
+                self.assertEqual(json.loads(returned["content"]), result)
+                self.approval.approve.assert_not_called()
+
+    def test_failed_api_cannot_be_followed_by_invented_success(self):
+        call = {"role": "assistant", "content": "", "tool_calls": [{"function": {
+            "name": "nasa_neo_feed", "arguments": {"start_date": "bad", "end_date": "bad"}}}]}
+        self.client.chat.side_effect = [call, {"role": "assistant", "content": "NASA found 999 objects."}]
+        with self.assertRaises(AgentError) as caught:
+            self.agent.run("Get NASA asteroid data")
+        self.assertEqual(caught.exception.code, "unresolved_tool_error")
+        self.assertNotIn("999", str(caught.exception))
+
+    def test_corrected_api_call_clears_previous_failure(self):
+        bad = {"role": "assistant", "content": "", "tool_calls": [{"function": {
+            "name": "nasa_neo_feed", "arguments": {"start_date": "bad", "end_date": "bad"}}}]}
+        good = {"role": "assistant", "content": "", "tool_calls": [{"function": {
+            "name": "nasa_neo_feed", "arguments": {"start_date": "2015-09-07", "end_date": "2015-09-08"}}}]}
+        self.client.chat.side_effect = [bad, good, FINAL]
+        with patch.object(self.registry.tools["nasa_neo_feed"], "execute", return_value={"status": "read", "message": "NASA data retrieved."}):
+            self.assertEqual(self.agent.run("Get NASA asteroid data"), "Done")
+
+    def test_invented_answer_without_required_call_is_blocked(self):
+        for task in ("Use nasa_neo_feed for 2015-09-07 through 2015-09-08", "Read my latest 5 emails"):
+            self.client.chat.return_value = {"role": "assistant", "content": "Invented answer"}
+            self.client.chat.reset_mock()
+            with self.subTest(task=task), self.assertRaises(AgentError) as caught:
+                self.agent.run(task)
+            self.assertEqual(caught.exception.code, "required_tool_not_called")
+            self.assertEqual(self.client.chat.call_count, 2)
+
+    def test_reminder_allows_real_tool_call(self):
+        self.client.chat.side_effect = [FINAL,
+            {"role": "assistant", "content": "", "tool_calls": [{"function": {
+                "name": "nasa_neo_feed", "arguments": {"start_date": "2015-09-07", "end_date": "2015-09-08"}}}]}, FINAL]
+        with patch.object(self.registry.tools["nasa_neo_feed"], "execute", return_value={"status": "read", "message": "NASA data retrieved."}):
+            self.assertEqual(self.agent.run("NASA data for 2015-09-07 to 2015-09-08"), "Done")
 
     def test_loop_is_bounded(self):
         self.agent.config = replace(self.config, max_iterations=2)
