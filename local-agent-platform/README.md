@@ -559,11 +559,14 @@ rejects credentials in URLs, checks all DNS results for public addresses, and pi
 the connection to a validated address. Local/Podman services, private/reserved IPs,
 and IPv6 translation/tunnel destinations are blocked. It ignores proxy environment
 variables, sends no credentials or cookies, runs no scripts, and fetches no images.
-Limits: 2 MiB response body, 50,000 characters returned to the model, 10-second
-socket timeout, and a 20-second body-read budget per response. DNS uses the system
-resolver timeout; these are not a hard wall-clock deadline for the entire tool call.
-Compressed responses are rejected to avoid decompression expansion. Large pages,
-PDFs, authenticated sites, and JavaScript-only pages may not work.
+Limits: 2 MiB compressed response body, 50,000 characters returned to the model,
+10-second socket timeout, and a 20-second body-read budget per response. DNS uses
+the system resolver timeout; these are not a hard wall-clock deadline for the
+entire tool call. gzip and deflate responses (including raw, non-zlib-wrapped
+deflate, which some servers send) are decompressed with an independent 8 MiB
+decompressed-output cap, so a small compressed payload cannot expand unboundedly;
+any other content encoding (such as br) is rejected. Large pages, PDFs,
+authenticated sites, and JavaScript-only pages may not work.
 
 Page content is returned as `untrusted_text`, with a system instruction that it is
 source information rather than authority to change tasks or invoke tools. Prompt

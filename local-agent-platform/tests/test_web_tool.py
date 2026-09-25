@@ -1,8 +1,10 @@
+import gzip
 import io
 import http.client
 import socket
 import ssl
 import unittest
+import zlib
 from unittest.mock import Mock, patch
 from email.message import Message
 
@@ -11,8 +13,8 @@ from src.errors import AgentError
 from src.logger import EventLogger
 from src.tools.email_tool import EmailTool
 from src.tools.registry import ToolRegistry
-from src.tools.web_tool import (MAX_BYTES, MAX_TEXT, PageText, WebTool, fetch_once,
-                                normalize_url, public_address, resolve_public)
+from src.tools.web_tool import (MAX_BYTES, MAX_TEXT, PageText, WebTool, decompress_bounded,
+                                fetch_once, normalize_url, public_address, resolve_public)
 
 URL = "https://example.com/"
 PUBLIC = (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.215.14", 443))
@@ -159,7 +161,7 @@ class TransportTests(unittest.TestCase):
         http.return_value.getresponse.return_value = self.response
         for name, value, code in (("Content-Length", str(MAX_BYTES + 1), "web_page_too_large"),
                                   ("Content-Length", "broken", "web_malformed_response"),
-                                  ("Content-Encoding", "gzip", "web_content_encoding")):
+                                  ("Content-Encoding", "br", "web_content_encoding")):
             self.headers = {name: value}
             with self.subTest(name=name, value=value), self.assertRaises(AgentError) as caught:
                 self.fetch("http://example.com/")
@@ -183,6 +185,22 @@ class TransportTests(unittest.TestCase):
     @patch("src.tools.web_tool.socket.socket")
     @patch("src.tools.web_tool.http.client.HTTPConnection")
     @patch("src.tools.web_tool.socket.getaddrinfo", return_value=[PUBLIC])
+    def test_gzip_and_deflate_responses_are_decompressed(self, dns, http, sock):
+        http.return_value.getresponse.return_value = self.response
+        raw_deflate = zlib.compressobj(wbits=-zlib.MAX_WBITS)
+        for encoding, compressed in (
+                ("gzip", gzip.compress(b"Hello")),
+                ("deflate", zlib.compress(b"Hello")),
+                ("deflate", raw_deflate.compress(b"Hello") + raw_deflate.flush())):
+            with self.subTest(encoding=encoding):
+                self.headers = {"Content-Type": "text/plain", "Content-Encoding": encoding,
+                                "Content-Length": str(len(compressed))}
+                self.response.read1.side_effect = [compressed, b""]
+                self.assertEqual(self.fetch("http://example.com/")[3], b"Hello")
+
+    @patch("src.tools.web_tool.socket.socket")
+    @patch("src.tools.web_tool.http.client.HTTPConnection")
+    @patch("src.tools.web_tool.socket.getaddrinfo", return_value=[PUBLIC])
     def test_redirect_to_private_is_blocked_before_second_socket(self, dns, http, sock):
         response = self.response
         response.status = 302
@@ -193,6 +211,36 @@ class TransportTests(unittest.TestCase):
             WebTool().execute(WebTool().validate({"url": "http://example.com/"}))
         self.assertEqual(caught.exception.code, "web_address_blocked")
         self.assertEqual(sock.call_count, 1)
+
+
+class DecompressionTests(unittest.TestCase):
+    def test_gzip_round_trip(self):
+        self.assertEqual(decompress_bounded(gzip.compress(b"hello world"), "gzip"), b"hello world")
+
+    def test_zlib_wrapped_deflate_round_trip(self):
+        self.assertEqual(decompress_bounded(zlib.compress(b"hello world"), "deflate"), b"hello world")
+
+    def test_raw_deflate_fallback(self):
+        compressor = zlib.compressobj(wbits=-zlib.MAX_WBITS)
+        raw = compressor.compress(b"hello world") + compressor.flush()
+        self.assertEqual(decompress_bounded(raw, "deflate"), b"hello world")
+
+    def test_identity_is_passthrough(self):
+        self.assertEqual(decompress_bounded(b"raw bytes", "identity"), b"raw bytes")
+
+    def test_decompression_bomb_is_bounded_not_expanded(self):
+        # A tiny compressed payload with a huge decompression ratio must be
+        # rejected quickly, never fully expanded into memory.
+        bomb = gzip.compress(b"0" * 10_000_000)
+        self.assertLess(len(bomb), 20_000)
+        with self.assertRaises(AgentError) as caught:
+            decompress_bounded(bomb, "gzip", limit=1000)
+        self.assertEqual(caught.exception.code, "web_page_too_large")
+
+    def test_corrupt_compressed_data_is_malformed(self):
+        with self.assertRaises(AgentError) as caught:
+            decompress_bounded(b"not actually compressed data", "gzip")
+        self.assertEqual(caught.exception.code, "web_malformed_response")
 
 
 class CompletedResponseTests(unittest.TestCase):

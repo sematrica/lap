@@ -1,8 +1,36 @@
 """An explicit, bounded conversation loop with no hidden framework."""
 
 import json
+import re
 
 from .errors import AgentError
+
+# Some local models occasionally write a tool call as JSON text instead of
+# using Ollama's native tool_calls field, especially on a reminded turn.
+# Recognize only that exact shape (optionally prefixed by a stray "assistant"
+# role echo) so it still goes through the normal validate/approve/execute
+# pipeline below; nothing here is trusted more than a native tool call would be.
+TEXT_TOOL_CALL = re.compile(r"^\s*(?:assistant\s*)?(\{.*\})\s*$", re.S)
+
+
+def parse_text_tool_call(content, offered):
+    match = TEXT_TOOL_CALL.match(content or "")
+    if not match:
+        return None
+    try:
+        data = json.loads(match.group(1))
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict) or set(data) not in ({"name", "parameters"}, {"name", "arguments"}):
+        return None
+    name = data.get("name")
+    arguments = data.get("parameters", data.get("arguments"))
+    # Mirror native tool_calls semantics: only recover a call to a tool that
+    # was actually offered this turn, so a hallucinated call to an unoffered
+    # tool falls through to the ordinary missing-tool reminder path instead.
+    if not isinstance(name, str) or name not in offered or not isinstance(arguments, dict):
+        return None
+    return {"function": {"name": name, "arguments": arguments}}
 
 
 class Agent:
@@ -44,6 +72,13 @@ class Agent:
             self.logger.emit("llm_response", iteration=iteration)
             messages.append(message)
             calls = message.get("tool_calls", [])
+            if not calls:
+                offered = {d["function"]["name"] for d in definitions}
+                fallback = parse_text_tool_call(message.get("content"), offered)
+                if fallback:
+                    self.logger.emit("text_tool_call_recovered", iteration=iteration,
+                                     tool=fallback["function"]["name"])
+                    calls = [fallback]
             if not calls:
                 if unresolved_errors:
                     # A model may invent a successful result after a tool error.

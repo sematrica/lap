@@ -6,6 +6,7 @@ import re
 import socket
 import ssl
 import time
+import zlib
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from urllib.parse import quote, urljoin, urlsplit, urlunsplit
@@ -13,15 +14,63 @@ from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 from ..errors import AgentError
 
 MAX_BYTES = 2 * 1024 * 1024
+# Decompressed output is bounded independently of the compressed transfer size
+# (MAX_BYTES above), so a small malicious payload cannot expand unboundedly.
+MAX_DECOMPRESSED_BYTES = 8 * 1024 * 1024
 MAX_TEXT = 50000
 MAX_REDIRECTS = 3
 SOCKET_TIMEOUT = 10
 READ_BUDGET = 20
 REDIRECTS = {301, 302, 303, 307, 308}
+SUPPORTED_ENCODINGS = {"identity", "gzip", "x-gzip", "deflate"}
 
 
 def fail(code, message):
     raise AgentError(code, message)
+
+
+class _TooLarge(Exception):
+    pass
+
+
+def _decompress_with(data, decompressor, limit):
+    output = bytearray()
+    pending = data
+    while True:
+        chunk = decompressor.decompress(pending, limit + 1 - len(output))
+        output.extend(chunk)
+        if len(output) > limit:
+            raise _TooLarge()
+        pending = decompressor.unconsumed_tail
+        if decompressor.eof:
+            break
+        if not pending and not chunk:
+            raise zlib.error("truncated compressed stream")
+    return bytes(output)
+
+
+def decompress_bounded(data, encoding, limit=MAX_DECOMPRESSED_BYTES):
+    """Decompress a fully-buffered response body with a hard output-size cap.
+
+    The cap is independent of the (already-bounded) compressed input size,
+    so a small compressed payload cannot exhaust memory/CPU via a high ratio.
+    """
+    if encoding in ("gzip", "x-gzip"):
+        attempts = [zlib.decompressobj(zlib.MAX_WBITS | 16)]
+    elif encoding == "deflate":
+        # Some servers send raw DEFLATE (RFC 1951) instead of the zlib-wrapped
+        # form the "deflate" content-coding technically specifies (RFC 1950).
+        attempts = [zlib.decompressobj(), zlib.decompressobj(-zlib.MAX_WBITS)]
+    else:
+        return data
+    for decompressor in attempts:
+        try:
+            return _decompress_with(data, decompressor, limit)
+        except _TooLarge:
+            fail("web_page_too_large", f"Decompressed webpage exceeds the {limit:,}-byte limit.")
+        except zlib.error:
+            continue
+    fail("web_malformed_response", "Webpage compressed content could not be decompressed.")
 
 
 def normalize_url(value):
@@ -141,7 +190,7 @@ def fetch_once(url):
         connection.request("GET", target, headers={
             "User-Agent": "LocalAgentPlatform/1.0 (read_webpage)",
             "Accept": "text/html, text/plain, application/xhtml+xml",
-            "Accept-Encoding": "identity", "Connection": "close",
+            "Accept-Encoding": "gzip, deflate", "Connection": "close",
         })
         with connection.getresponse() as response:
             if response.status in REDIRECTS:
@@ -151,8 +200,9 @@ def fetch_once(url):
             media_type = response.headers.get_content_type()
             if media_type not in {"text/html", "text/plain", "application/xhtml+xml"}:
                 fail("web_content_type", "Only HTML and plain-text webpages are supported; PDFs and downloads are not.")
-            if response.getheader("Content-Encoding", "identity").lower() != "identity":
-                fail("web_content_encoding", "The server returned compressed content despite requesting plain content.")
+            encoding = response.getheader("Content-Encoding", "identity").lower()
+            if encoding not in SUPPORTED_ENCODINGS:
+                fail("web_content_encoding", "Unsupported content encoding; only identity, gzip, and deflate are supported.")
             length = response.getheader("Content-Length")
             if length is not None:
                 try:
@@ -177,7 +227,8 @@ def fetch_once(url):
                     fail("web_page_too_large", f"Webpage exceeds the {MAX_BYTES:,}-byte download limit.")
             if length is not None and len(data) != int(length):
                 fail("web_malformed_response", "Webpage download was incomplete.")
-            return 200, media_type, response.headers.get_content_charset() or "utf-8", bytes(data)
+            body = decompress_bounded(bytes(data), encoding)
+            return 200, media_type, response.headers.get_content_charset() or "utf-8", body
     except (TimeoutError, socket.timeout):
         fail("web_timeout", "Webpage connection or download timed out.")
     except (OSError, http.client.HTTPException, UnicodeError):

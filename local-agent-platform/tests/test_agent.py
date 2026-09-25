@@ -4,7 +4,7 @@ import unittest
 from dataclasses import replace
 from unittest.mock import Mock, patch
 
-from src.agent import Agent
+from src.agent import Agent, parse_text_tool_call
 from src.config import load_config
 from src.errors import AgentError
 from src.logger import EventLogger
@@ -150,6 +150,51 @@ class AgentTests(unittest.TestCase):
                 "name": "nasa_neo_feed", "arguments": {"start_date": "2015-09-07", "end_date": "2015-09-08"}}}]}, FINAL]
         with patch.object(self.registry.tools["nasa_neo_feed"], "execute", return_value={"status": "read", "message": "NASA data retrieved."}):
             self.assertEqual(self.agent.run("NASA data for 2015-09-07 to 2015-09-08"), "Done")
+
+    def test_text_tool_call_is_recovered_and_dispatched(self):
+        self.client.chat.side_effect = [
+            {"role": "assistant", "content":
+                'assistant\n\n{"name": "nasa_neo_feed", "parameters": {"start_date": "2015-09-07", "end_date": "2015-09-08"}}'},
+            FINAL]
+        with patch.object(self.registry.tools["nasa_neo_feed"], "execute",
+                          return_value={"status": "read", "message": "NASA data retrieved."}):
+            self.assertEqual(self.agent.run("NASA data for 2015-09-07 to 2015-09-08"), "Done")
+        events = [json.loads(line)["event"] for line in self.logs.getvalue().splitlines()]
+        self.assertIn("text_tool_call_recovered", events)
+
+    def test_prose_resembling_json_is_not_treated_as_a_tool_call(self):
+        content = 'The config looks like {"name": "example", "value": 1} in the docs.'
+        self.client.chat.return_value = {"role": "assistant", "content": content}
+        self.assertEqual(self.agent.run("Explain this config"), content)
+        self.approval.approve.assert_not_called()
+
+    def test_parse_text_tool_call_shape(self):
+        offered = {"x"}
+        self.assertIsNone(parse_text_tool_call("", offered))
+        self.assertIsNone(parse_text_tool_call("Just a plain answer.", offered))
+        self.assertIsNone(parse_text_tool_call('{"name": "x"}', offered))
+        self.assertIsNone(parse_text_tool_call('{"name": "x", "parameters": {}, "extra": 1}', offered))
+        self.assertIsNone(parse_text_tool_call('{"name": 1, "parameters": {}}', offered))
+        self.assertIsNone(parse_text_tool_call('{"name": "x", "parameters": "not a dict"}', offered))
+        self.assertIsNone(parse_text_tool_call('prefix {"name": "x", "parameters": {}} suffix', offered))
+        self.assertIsNone(parse_text_tool_call('{"name": "x", "parameters": {}}', frozenset()))
+        self.assertEqual(parse_text_tool_call('{"name": "x", "parameters": {"a": 1}}', offered),
+                         {"function": {"name": "x", "arguments": {"a": 1}}})
+        self.assertEqual(parse_text_tool_call('assistant\n\n{"name": "x", "arguments": {"a": 1}}', offered),
+                         {"function": {"name": "x", "arguments": {"a": 1}}})
+
+    def test_hallucinated_call_to_unoffered_tool_falls_back_to_reminder(self):
+        # read_webpage isn't offered yet (no search happened this task), so a
+        # hallucinated text call to it must not be dispatched at all; it should
+        # fall through to the normal missing-required-tool reminder instead.
+        self.client.chat.return_value = {"role": "assistant",
+            "content": '{"name": "read_webpage", "parameters": {"url": "https://example.com/"}}'}
+        with patch.object(self.registry, "dispatch", wraps=self.registry.dispatch) as dispatch:
+            with self.assertRaises(AgentError) as caught:
+                self.agent.run("What is the latest news?")
+        self.assertEqual(caught.exception.code, "required_tool_not_called")
+        self.assertEqual(self.client.chat.call_count, 2)
+        dispatch.assert_not_called()
 
     def test_loop_is_bounded(self):
         self.agent.config = replace(self.config, max_iterations=2)
