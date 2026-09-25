@@ -14,6 +14,7 @@ from src.tools.registry import ToolRegistry
 from src.tools.web_tool import WebTool
 from src.tools.inbox_tool import InboxTool
 from src.tools.nasa_tool import NasaTool
+from src.tools.search_tool import SearchTool
 
 EMAIL = {"to": "person@example.com", "subject": "Hello", "body": "Report ready."}
 CALL = {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "send_email", "arguments": EMAIL}}]}
@@ -31,6 +32,7 @@ class AgentTests(unittest.TestCase):
         self.registry = ToolRegistry(self.config.tools, self.config.name, self.approval, self.logger)
         self.registry.register(EmailTool(self.config.smtp, True, self.logger))
         self.registry.register(WebTool())
+        self.registry.register(SearchTool(Mock()))
         self.registry.register(InboxTool(self.config.imap))
         self.registry.register(NasaTool())
         self.output = []
@@ -41,7 +43,9 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(self.agent.run("What is 2+2?"), "Done")
         self.approval.approve.assert_not_called()
         self.assertEqual(self.client.chat.call_count, 1)
-        self.assertEqual(self.client.chat.call_args.args[1], [])
+        # search_web is offered by default (search_allowed) but not required for stable facts.
+        definitions = self.client.chat.call_args.args[1]
+        self.assertEqual([d["function"]["name"] for d in definitions], ["search_web"])
 
     @patch("src.tools.email_tool.smtplib.SMTP")
     def test_tool_round_trip_and_denial(self, smtp):

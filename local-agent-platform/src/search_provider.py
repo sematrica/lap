@@ -41,7 +41,9 @@ class BraveSearchProvider:
                                 "text_decorations": "false", "extra_snippets": "false"},
                         headers={"X-Subscription-Token": self.api_key,
                                  "Accept": "application/json", "Accept-Encoding": "identity"}) as response:
-                    if response.status_code in (401, 403):
+                    if response.status_code in (401, 403, 422):
+                        # Brave returns 422 SUBSCRIPTION_TOKEN_INVALID for a bad/unsubscribed key,
+                        # not a malformed request: every other request parameter here is fixed.
                         raise AgentError("search_authentication_error", "Search provider rejected the API key or its plan permissions.")
                     if response.status_code == 429:
                         raise AgentError("search_rate_limited", "Search provider rate limit reached. Try again later.")
