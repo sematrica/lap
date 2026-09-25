@@ -59,6 +59,7 @@ class ProviderTests(unittest.TestCase):
 
     def test_safe_status_errors_and_no_redirect_following(self):
         for status, code in ((401, "search_authentication_error"), (403, "search_authentication_error"),
+                             (422, "search_authentication_error"),
                              (429, "search_rate_limited"), (500, "search_provider_error"),
                              (400, "search_provider_error"), (302, "search_provider_error")):
             provider = self.provider(status=status, raw=b"secret-token private internal error",

@@ -57,6 +57,10 @@ class ToolRegistry:
     def finish_answer(self, answer, task):
         return self.retrieval.finish(answer, task, self.enabled)
 
+    def candidate_urls(self, limit=3):
+        # Concrete URLs a follow-up read_webpage reminder can point the model at.
+        return list(dict.fromkeys(item["url"] for item in self.retrieval.search_results))[:limit]
+
     def dispatch(self, name, arguments, iteration, *, task):
         if task != self.task:
             self.begin_task(task)

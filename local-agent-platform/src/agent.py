@@ -56,10 +56,16 @@ class Agent:
                         raise AgentError("required_tool_not_called",
                                          "The model did not call the required data tool; no verified answer is available. Try requesting the tool explicitly.")
                     reminded = True
+                    hint = ""
+                    if "read_webpage" in missing:
+                        urls = self.registry.candidate_urls()
+                        if urls:
+                            hint = (" Candidate URLs from your search results: " + "; ".join(urls) +
+                                    ". Call read_webpage now with url set to one of these exact values.")
                     messages.append({"role": "system", "content":
                         "No verified result exists for: " + ", ".join(sorted(missing)) +
-                        ". Call the required function using native tool_calls now. "
-                        "Do not answer with invented data or write a pretend call in text."})
+                        ". Call the required function using native tool_calls now." + hint +
+                        " Do not answer with invented data or write a pretend call in text."})
                     continue
                 answer = self.registry.finish_answer(message["content"], task)
                 self.logger.emit("agent_completed", iteration=iteration)
