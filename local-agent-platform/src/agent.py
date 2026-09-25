@@ -13,7 +13,7 @@ from .errors import AgentError
 TEXT_TOOL_CALL = re.compile(r"^\s*(?:assistant\s*)?(\{.*\})\s*$", re.S)
 
 
-def parse_text_tool_call(content):
+def parse_text_tool_call(content, offered):
     match = TEXT_TOOL_CALL.match(content or "")
     if not match:
         return None
@@ -25,7 +25,10 @@ def parse_text_tool_call(content):
         return None
     name = data.get("name")
     arguments = data.get("parameters", data.get("arguments"))
-    if not isinstance(name, str) or not name or not isinstance(arguments, dict):
+    # Mirror native tool_calls semantics: only recover a call to a tool that
+    # was actually offered this turn, so a hallucinated call to an unoffered
+    # tool falls through to the ordinary missing-tool reminder path instead.
+    if not isinstance(name, str) or name not in offered or not isinstance(arguments, dict):
         return None
     return {"function": {"name": name, "arguments": arguments}}
 
@@ -70,7 +73,8 @@ class Agent:
             messages.append(message)
             calls = message.get("tool_calls", [])
             if not calls:
-                fallback = parse_text_tool_call(message.get("content"))
+                offered = {d["function"]["name"] for d in definitions}
+                fallback = parse_text_tool_call(message.get("content"), offered)
                 if fallback:
                     self.logger.emit("text_tool_call_recovered", iteration=iteration,
                                      tool=fallback["function"]["name"])
