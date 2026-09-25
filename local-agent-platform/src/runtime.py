@@ -5,12 +5,15 @@ from .tools.inbox_tool import InboxTool
 from .tools.nasa_tool import NasaTool
 from .tools.registry import ToolRegistry
 from .tools.web_tool import WebTool
+from .tools.search_tool import SearchTool
+from .search_provider import build_search_provider
 
 
 def build_registry(config, approval, logger):
     registry = ToolRegistry(config.tools, config.name, approval, logger)
     registry.register(EmailTool(config.smtp, config.dry_run, logger))
     registry.register(WebTool())
+    registry.register(SearchTool(build_search_provider(config.search)))
     registry.register(InboxTool(config.imap))
     registry.register(NasaTool(config.nasa_api_key, config.nasa_timeout))
     registry.definitions()  # Fail at startup for unknown configured tools.

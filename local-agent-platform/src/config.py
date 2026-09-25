@@ -32,6 +32,13 @@ class IMAPConfig:
 
 
 @dataclass(frozen=True)
+class SearchConfig:
+    provider: str = "brave"
+    api_key: str = field(default="", repr=False)
+    timeout: float = 10
+
+
+@dataclass(frozen=True)
 class Config:
     name: str
     role: str
@@ -47,6 +54,7 @@ class Config:
     imap: IMAPConfig = field(default_factory=IMAPConfig, repr=False)
     nasa_api_key: str = field(default="DEMO_KEY", repr=False)
     nasa_timeout: float = 30
+    search: SearchConfig = field(default_factory=SearchConfig, repr=False)
 
 
 def invalid(message):
@@ -118,6 +126,11 @@ def load_config(path="config/agent.yaml", env=None):
     nasa_key = env.get("NASA_API_KEY", "DEMO_KEY").strip()
     if not nasa_key or any(ord(c) < 33 or ord(c) > 126 for c in nasa_key):
         invalid("NASA_API_KEY must be a nonempty ASCII token without whitespace.")
+    provider = env.get("SEARCH_PROVIDER", "brave").strip().lower()
+    if provider != "brave":
+        invalid("SEARCH_PROVIDER must be brave.")
+    search = SearchConfig(provider=provider, api_key=env.get("BRAVE_SEARCH_API_KEY", "").strip(),
+                          timeout=number(env, "SEARCH_TIMEOUT_SECONDS", 10, 1, 60))
     return Config(
         **{k: data[k] for k in ("name", "role", "description", "system_prompt")},
         model=model, tools=tuple(enabled), base_url=base_url,
@@ -125,4 +138,5 @@ def load_config(path="config/agent.yaml", env=None):
         max_iterations=number(env, "MAX_AGENT_ITERATIONS", 10, 1, 100, integer=True),
         dry_run=boolean(env, "EMAIL_DRY_RUN", True), smtp=smtp, imap=imap,
         nasa_api_key=nasa_key, nasa_timeout=number(env, "NASA_TIMEOUT_SECONDS", 30, 1, 300),
+        search=search,
     )

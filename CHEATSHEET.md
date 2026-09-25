@@ -2,6 +2,26 @@
 
 ## Stage 2: run all agents as background services
 
+Optional web discovery is now available as `search_web`. To enable it for Agent 1:
+
+1. Obtain a Brave Search API key and add `BRAVE_SEARCH_API_KEY=your-real-key` to
+   the existing private `.env`. Defaults are `SEARCH_PROVIDER=brave` and
+   `SEARCH_TIMEOUT_SECONDS=10`. Brave is an external, metered search service;
+   see the README for pricing and privacy details.
+2. Uncomment `- search_web` under `tools` in `config/agent.yaml`. Keep
+   `read_webpage` enabled so the agent can verify discovered sources. Other
+   agents' tool lists remain independent.
+3. From the application folder, run `podman compose up -d --build --force-recreate agent-01`.
+4. Submit a task such as `What is the latest stable Python release? Prefer python.org
+   and cite a source.` Stable basics such as `What is polymorphism in Java?` should
+   not need search.
+
+Search returns up to five discovery results. The agent selects a source, reads it
+through the existing public-page security checks, then answers with source URLs.
+No Brave key is included; search remains opt-in. Never paste private inbox contents
+or credentials into a search query. Search does not change the email approval rules.
+
+
 The default workflow is now Compose. The older numbered sections below describe
 the optional interactive CLI workflow; their `local-agent:stage1` image examples
 can use the current `localhost/local-agent:stage2` image instead.

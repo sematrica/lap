@@ -260,7 +260,154 @@ behavior, dependency recovery, approval refusal, allowlisting, and secret omissi
 FastAPI's [lifespan testing pattern](https://fastapi.tiangolo.com/advanced/testing-events/)
 is used to open and close clients predictably.
 
-## Existing tools and interactive CLI reference
+## Optional public web search
+
+`search_web` discovers sources; `read_webpage` retrieves their contents. No browser,
+JavaScript, crawling, login, or new dependency was added. Every call still passes
+through ToolRegistry. Search is **opt-in**: the supplied YAML files contain a commented
+`search_web` entry, so existing agents do not start sending queries to a provider.
+
+```text
+User asks a current question
+  → Agent → search_web → BraveSearchProvider
+  → titles / snippets / result URLs (untrusted)
+  → Agent selects a useful result
+  → read_webpage → existing DNS/IP/redirect/content checks
+  → Agent → answer with verified source URLs
+```
+
+### Provider and cost
+
+The first backend is [Brave Web Search](https://api-dashboard.search.brave.com/api-reference/web/search/get).
+It provides structured JSON through a fixed HTTPS endpoint and requires a private
+API key. As checked on September 23, 2026, [Brave lists](https://brave.com/search/api/)
+$5 per 1,000 Search requests, $5 monthly credits, and a 50-query/second plan capacity.
+Check your account's current pricing, quotas, and billing terms before enabling it.
+This implementation makes no purchase, creates no account, and has no global billing
+cap. Up to three provider attempts per task are allowed; there are no transport retries.
+Multiple agents share any account quota associated with the same key.
+
+Queries leave your Mac for Brave. Do not include private email bodies, credentials,
+or other sensitive material in a search task. LAP does not log the query, returned
+titles, URLs, snippets, or API key. Only the query is sent to Brave, not the whole
+conversation or Ollama system prompt. Returned snippets subsequently go to Ollama.
+
+The `SearchProvider` protocol in `src/search_provider.py` accepts a query and returns
+title/url/snippet dictionaries. Only its factory/provider implementation needs to
+change for a future backend. The initial factory supports `brave` only; there is no
+arbitrary endpoint setting or model-controlled provider parameter.
+
+### Enable search for Agent 1
+
+1. Obtain a Search API key through Brave's linked site. Add these settings to your
+   existing private `.env` (do not overwrite it with `.env.example`):
+
+   ```dotenv
+   SEARCH_PROVIDER=brave
+   BRAVE_SEARCH_API_KEY=put-your-real-key-here
+   SEARCH_TIMEOUT_SECONDS=10
+   ```
+
+2. Edit `config/agent.yaml` and uncomment `search_web` under `tools`. Keep
+   `read_webpage` enabled for source verification. For example:
+
+   ```yaml
+   tools:
+     - search_web
+     - read_email
+     - nasa_neo_feed
+     - read_webpage
+     - send_email
+   ```
+
+   Agent 2 and Agent 3 remain unchanged unless you enable the tool in their YAMLs.
+   Credentials belong in `.env`, never YAML, task JSON, source code, or Git.
+
+3. Install the code update and recreate Agent 1 with the new environment:
+
+   ```bash
+   cd /Users/mac14/Developer/LocalAgentPlatform/local-agent-platform
+   podman compose up -d --build --force-recreate agent-01
+   curl -sS http://localhost:8101/info
+   ```
+
+   Check that `tools` includes both `search_web` and `read_webpage`. After future
+   `.env`/YAML-only edits, `podman compose up -d --force-recreate agent-01` is enough.
+   `/health` still checks Ollama/model availability, not your Brave key or quota.
+
+Should search and read a source:
+
+```bash
+curl -sS http://localhost:8101/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"task":"What is the latest stable Python release? Prefer python.org and cite the source."}'
+```
+
+Should answer without searching:
+
+```bash
+curl -sS http://localhost:8101/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"task":"What is polymorphism in Java?"}'
+```
+
+Watch `podman compose logs -f agent-01` for `web_search_requested`,
+`web_search_started`, `web_search_completed`, or `web_search_failed`. Events retain
+the HTTP task ID and include counts/error codes, not queries or result contents.
+
+### Bounds and retrieval rules
+
+- Input is exactly `{"query":"..."}`: 1–300 characters, at most 50 words, no control
+  characters. No arbitrary headers, endpoints, provider parameters, or credentials.
+- At most 5 results per search. Titles are at most 200 characters, URLs 2,048,
+  snippets 600. Total serialized tool output is at most 20 KiB; provider bodies
+  are capped at 256 KiB. URLs over the limit are discarded, never shortened.
+- The provider uses TLS verification, no proxies inherited from the environment,
+  no redirects, no reused cookies, and a configurable 1–60 second socket timeout
+  (default 10). A body deadline is checked between chunks; one blocked read can
+  extend wall time by a socket timeout. Compressed responses are rejected.
+- Only actual result `url` fields grant permission to request a page. URLs embedded
+  in snippets, webpage text, or invented by the model do not. Permission resets at
+  every task, even if the same task text is submitted twice.
+- Discovered URLs go through the unchanged read_webpage transport: all DNS answers
+  must be public, sockets are pinned, TLS certificates checked, redirects rechecked,
+  local/private addresses blocked, HTTPS downgrade blocked, and the existing 2 MiB
+  download / 50,000-character text / content-type restrictions still apply. Search
+  results can contain inaccessible URLs; discovery never proves a URL safe to fetch.
+- Explicit time-sensitive wording (latest/current/news/prices/releases, etc.)
+  requires an actual search when enabled. After a substantive search, an enabled
+  reader must retrieve at least one page before the final answer. The existing loop
+  allows one missing-tool reminder, then stops instead of returning an invented answer.
+- Stable programming concepts (polymorphism, inheritance, encapsulation, abstraction,
+  recursion) do not offer search unless the task also asks for research, verification,
+  or changing information. Other stable questions rely on the model's routing judgment.
+- Simple navigation can return discovered links without reading. With the reader
+  disabled, substantive requests return a runtime-generated discovery-only message
+  and actual result URLs. Empty results return an honest inability to verify.
+- HTTP(S) citations in retrieval answers are checked against actual result URLs and
+  final page URLs; made-up URLs cause `unverified_source_url`. When the model omits
+  citations, the runtime appends returned sources, preferring final read URLs. This
+  verifies URL provenance, not whether every claim is supported by the page.
+- Explicit no-search instructions and private email/NASA-only tasks block search.
+  Mixed research/email tasks require an explicit research request in the original
+  user task. These English keyword rules are conservative heuristics, not a complete
+  intent classifier or a semantic prompt-injection detector. Prompts additionally
+  tell the model never to use external content as instructions or put private tool
+  contents in queries. Existing email approval and recipient checks remain mandatory.
+
+Failures use stable tool codes: `invalid_search_query`, `search_configuration_error`,
+`search_authentication_error`, `search_rate_limited`, `search_provider_error`,
+`search_timeout`, `search_response_error`, `search_response_too_large`,
+`search_not_authorized`, and `search_limit`. The existing agent loop reports unresolved
+tool errors without displaying model-invented success. Error responses never include
+raw provider bodies, authentication headers, or raw transport exceptions.
+
+Search freshness and relevance depend on Brave's index. Source selection and reading
+comprehension still depend on the configured Ollama model. Some pages require JavaScript,
+block automated clients, or exceed download limits. There is no autonomous crawling,
+search scheduling, persisted search history, or cross-task URL permission.
+
+## Existing tools and interactive CLI reference (continued)
 
 The sections below document tools and the original standalone CLI workflow.
 Their `local-agent:stage1` examples are historical; use `localhost/local-agent:stage2`
@@ -400,10 +547,11 @@ API key, browser installation, or SMTP credentials are needed. Example task:
 Read https://example.com/ and summarize what the page is for. Cite the URL.
 ```
 
-`read_webpage` is registered in `main.py` and enabled in the supplied Agent-01 through
+`read_webpage` is registered through `runtime.py` and enabled in the supplied Agent-01 through
 Agent-04 YAML configurations. Remove `read_webpage` from an agent's `tools` list to
-disable it. The tool is offered only for tasks containing an HTTP(S) URL, and its
-requested URL must match a URL in that task. Redirects are followed at most three
+disable it. The tool is offered for user-supplied URLs and, when search is enabled,
+URLs returned in actual search results during the current task. Its requested URL
+must belong to one of those two sets. Redirects are followed at most three
 times, checking each new destination. Links found in page text are not fetched.
 
 The reader accepts HTTP port 80 and HTTPS port 443, verifies HTTPS certificates,
@@ -411,7 +559,7 @@ rejects credentials in URLs, checks all DNS results for public addresses, and pi
 the connection to a validated address. Local/Podman services, private/reserved IPs,
 and IPv6 translation/tunnel destinations are blocked. It ignores proxy environment
 variables, sends no credentials or cookies, runs no scripts, and fetches no images.
-Limits: 512 KiB response body, 12,000 characters returned to the model, 10-second
+Limits: 2 MiB response body, 50,000 characters returned to the model, 10-second
 socket timeout, and a 20-second body-read budget per response. DNS uses the system
 resolver timeout; these are not a hard wall-clock deadline for the entire tool call.
 Compressed responses are rejected to avoid decompression expansion. Large pages,

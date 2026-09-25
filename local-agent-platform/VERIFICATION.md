@@ -1,5 +1,40 @@
 # LAP verification
 
+## Optional web discovery — 2026-09-23 (local time)
+
+- Added the `search_web` tool, a small `SearchProvider` protocol and Brave backend,
+  environment-only provider settings, and task-scoped result URL provenance.
+- All 108 unit tests passed: all 76 existing tests plus 32 new tests for provider
+  status/timeout/configuration errors, response/query/field limits, untrusted
+  snippets, credentials, tool allowlisting, task isolation, source citation checks,
+  required source reads, empty results, and search-to-read flow. Tests are offline
+  and use httpx.MockTransport or a mock provider. No email is sent.
+- Regression checks confirmed a discovered URL resolving to a private/local IP
+  is rejected before opening a socket. A discovered public page redirecting to
+  127.0.0.1 opens no second socket. The original DNS pinning, redirects, body and
+  content-type tests continue to pass unchanged.
+- The deterministic latest-Python test uses explicitly fictional fixture data:
+  search returns an official-domain URL, the selected page is read, and the final
+  answer cites the page's final redirect URL. This is a flow test, not a live claim
+  about the current Python version.
+- No Brave key was supplied or read from the private `.env`. Live provider search
+  has therefore not been verified. The private environment and running containers
+  are left unchanged; enable the commented YAML tool entry after configuring a key.
+- Local Ollama (`llama3.1:latest`) initially attempted an unnecessary search for
+  Java polymorphism. A narrow stable-concept routing rule and regression test fixed
+  this. A subsequent latest-Python check skipped the native tool call and was safely
+  blocked; an explicit required-first-step instruction corrected that routing.
+- The final live local-model check answered polymorphism without a tool call and
+  emitted a native `search_web` call for the latest stable Python release. Without
+  a key, the runtime reported the expected configuration failure and suppressed
+  the model's fallback answer. These checks made no Brave API request.
+- No dependency changes. The existing non-failing Starlette TestClient/httpx
+  deprecation warning remains.
+- All 108 tests also passed from the delivered Developer repository, and
+  `git diff --check` passed. Podman built `localhost/local-agent:stage2` successfully:
+  `0709a7f54797b0309c7820efbe735ce119bbb1882b3dca2b93f8f1e877326d79`.
+  Existing containers were not recreated; the new image takes effect on recreation.
+
 ## Stage 2 persistent runtime — 2026-09-22 (local time)
 
 - All 76 unit tests passed: the original 62 tests plus 14 service tests. Ollama,
